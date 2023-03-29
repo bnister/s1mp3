@@ -18,6 +18,7 @@
 #endif
 #include <string>
 #include <list>
+#include <cstdio>
 
 #include "AdfuDevice.h"
 #include "AdfuException.h"
@@ -25,7 +26,7 @@
 #include "AdfuCsw.h"
 
 #ifdef LINUX
-#include <usb.h>
+#include <libusb.h>
 #else
 #include "libusb/libusb.h"  //also needs "libusb/libusb.lib"
 #pragma comment(lib, "libusb.lib")
@@ -43,8 +44,8 @@
 class AdfuDeviceLibusb : AdfuDevice {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-public:AdfuDeviceLibusb() : hDevice(NULL) {/*::usb_set_debug(0);*/ ::usb_init();}
-public:~AdfuDeviceLibusb() {close();}
+public:AdfuDeviceLibusb() : hDevice(NULL) {/*::usb_set_debug(0);*/ ::libusb_init(NULL);}
+public:~AdfuDeviceLibusb() {close(); ::libusb_exit(NULL);}
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -52,7 +53,9 @@ public:void close()
 {
   if(hDevice != NULL)
   {
-    ::usb_close(hDevice);
+    ::libusb_release_interface(hDevice, 0);
+    ::libusb_attach_kernel_driver(hDevice, 0);
+    ::libusb_close(hDevice);
     hDevice = NULL;
   }
 }
@@ -61,26 +64,26 @@ public:void close()
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 public:void open(std::string &strName)
 {
+  struct libusb_device **lppDevs, *lpDev;
+  int i = 0;
+
   close();
 
-  ::usb_find_busses();
-  ::usb_find_devices();
+  if (::libusb_get_device_list(NULL, &lppDevs) < 0) throw AdfuException(ERROR_OPEN_FAILED);
 
-  for(usb_bus *lpBus = ::usb_get_busses(); lpBus; lpBus = lpBus->next)
+  while((lpDev = lppDevs[i++]) != NULL)
   {
-    for(struct usb_device *lpDev = lpBus->devices; lpDev; lpDev = lpDev->next)
+    if(strName.compare(device_name(lpDev)) == 0)
     {
-      if(strName.compare(lpDev->filename) == 0)
-      {
-        hDevice = ::usb_open(lpDev);
-        if(hDevice == NULL) throw AdfuException(ERROR_OPEN_FAILED);
-        if(::usb_set_configuration(hDevice, 1) != 0) throw AdfuException(ERROR_OPEN_FAILED);
-        if(::usb_claim_interface(hDevice, 0) != 0) throw AdfuException(ERROR_OPEN_FAILED);
-        if(::usb_set_altinterface(hDevice, 0) != 0) throw AdfuException(ERROR_OPEN_FAILED);
-        return; //success
-      }
+      if (::libusb_open(lpDev, &hDevice) != 0) hDevice = NULL;
+      ::libusb_free_device_list(lppDevs, 1);
+      if(hDevice == NULL) throw AdfuException(ERROR_OPEN_FAILED);
+      ::libusb_detach_kernel_driver(hDevice, 0);
+      if(::libusb_claim_interface(hDevice, 0) != 0) throw AdfuException(ERROR_OPEN_FAILED);
+      return; //success
     }
   }
+  ::libusb_free_device_list(lppDevs, 1);
 
   throw AdfuException(ERROR_OPEN_FAILED);
 }
@@ -113,22 +116,24 @@ public:unsigned int io(DIR nDir, const void *lpCdb, unsigned char uCdbLength,
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 public:void enumerate(std::list<std::string> &lstDevice)
 {
+  struct libusb_device **lppDevs, *lpDev;
+  int i = 0;
+
   lstDevice.clear();
   
-  ::usb_find_busses();
-  ::usb_find_devices();
+  if (::libusb_get_device_list(NULL, &lppDevs) < 0) return;
 
-  for(usb_bus *lpBus = ::usb_get_busses(); lpBus; lpBus = lpBus->next)
+  while((lpDev = lppDevs[i++]) != NULL)
   {
-    for(struct usb_device *lpDev = lpBus->devices; lpDev; lpDev = lpDev->next)
+    struct libusb_device_descriptor desc;
+    libusb_get_device_descriptor(lpDev, &desc);
+    if(desc.idVendor == LIBUSB_VENDOR_ID /*&& desc.idProduct == LIBUSB_PRODUCT_ID*/)
     {
-      if(lpDev->descriptor.idVendor == LIBUSB_VENDOR_ID /*&& lpDev->descriptor.idProduct == LIBUSB_PRODUCT_ID*/)
-      {
-        std::string str = lpDev->filename;
-        lstDevice.push_back(str);
-      }
+      std::string str = device_name(lpDev);
+      lstDevice.push_back(str);
     }
   }
+  ::libusb_free_device_list(lppDevs, 1);
 }
 
 
@@ -136,10 +141,10 @@ public:void enumerate(std::list<std::string> &lstDevice)
 private:unsigned int write(const void *lp, unsigned int u, unsigned int uTimeout =3)
 {
   if(hDevice == NULL) throw AdfuException(ERROR_INVALID_HANDLE);
-  int nResult = 
-    ::usb_bulk_write(hDevice, 0x01, (char *)lp, u, ((uTimeout > 0)? uTimeout : 0xFFFF)*1000);
+  int nTransferred, nResult = 
+    ::libusb_bulk_transfer(hDevice, 0x01, (unsigned char *)lp, u, &nTransferred, uTimeout * 1000);
   if(nResult < 0) throw AdfuException(ERROR_WRITE_FAULT);
-  return (unsigned int)nResult;
+  return (unsigned int)nTransferred;
 }
 
 
@@ -147,15 +152,27 @@ private:unsigned int write(const void *lp, unsigned int u, unsigned int uTimeout
 private:unsigned int read(const void *lp, unsigned int u, unsigned int uTimeout =3)
 {
   if(hDevice == NULL) throw AdfuException(ERROR_INVALID_HANDLE);
-  int nResult = 
-    ::usb_bulk_read(hDevice, 0x82, (char *)lp, u, ((uTimeout > 0)? uTimeout : 0xFFFF)*1000);
+  int nTransferred, nResult = 
+    ::libusb_bulk_transfer(hDevice, 0x82, (unsigned char *)lp, u, &nTransferred, uTimeout * 1000);
   if(nResult < 0) throw AdfuException(ERROR_READ_FAULT);
-  return (unsigned int)nResult;
+  return (unsigned int)nTransferred;
 }
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-private:usb_dev_handle *hDevice;
+private:std::string device_name(libusb_device *lpDev)
+{
+  char cstr[9];
+  std::snprintf(cstr, sizeof(cstr), "%d-%d",
+    libusb_get_bus_number(lpDev),
+    libusb_get_device_address(lpDev)
+  );
+  return std::string(cstr);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+private:libusb_device_handle *hDevice;
 };
 
 

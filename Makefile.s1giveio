@@ -1,6 +1,6 @@
 ifneq ($(ENV),WIN32)
 #CCFLAGS=-O2 -I/usr/src -DLINUX
-CCFLAGS=-O2 -DLINUX
+CCFLAGS=-O2 -DLINUX -Wno-narrowing -Wno-unused-result $(shell pkg-config --cflags libusb-1.0)
 EXT=
 DEL=rm -f
 DEST=
@@ -12,7 +12,7 @@ EXT=.exe
 DEL=@del
 DEST=win32-bin/
 endif
-LDFLAGS=-lusb
+LDFLAGS=-lusb-1.0
 
 all: s1giveio/s1giveio
 

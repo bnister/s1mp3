@@ -649,3 +649,5 @@ dma_tx_lp:      in    a, (DMA1_COMMAND_REG)                 ;wait until dma tran
                 .org   STACK_ADDR
                 .db    0
                 .ascii "(c)wiRe"
+
+                .area _DATA

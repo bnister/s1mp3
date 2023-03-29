@@ -11,7 +11,7 @@
 //=================================================================================================
 #include "../common/common.h"
 #include "../common/AdfuSession.h"
-#include "../common/giveio.h"
+#include "../common/GiveIO.h"
 #include "dasm.h"
 #include <exception>
 
@@ -132,7 +132,7 @@ bool upload(uint16 addr)
 {
   char fname[MAX_PATH];
   printf("filename: ");
-  fgets(fname, 1000, stdin);
+  fgets(fname, MAX_PATH, stdin);
   fname[strlen(fname)-1] = 0;
   if(!fname[0]) return false;
 
